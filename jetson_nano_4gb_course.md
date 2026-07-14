@@ -83,7 +83,264 @@ cat /etc/os-release                # Ubuntu 18.04.6 LTS
 sudo systemctl set-default multi-user.target
 sudo reboot
 ```
+## If internet not availiable : 
+# Connecting a Jetson Nano to the Internet Through a Laptop (USB + Phone Tethering + Network Forwarding)
 
+## Goal
+
+Use the laptop as a router:
+
+``` text
+Internet
+    │
+Phone (USB Tethering)
+    │
+Laptop
+    ├── Internet
+    └── USB Ethernet (192.168.55.100)
+            │
+            ▼
+     Jetson Nano (192.168.55.1)
+```
+
+SSH remains functional while the Jetson gains Internet access.
+
+------------------------------------------------------------------------
+
+## Commands Used
+
+### 1. Enable IPv4 Forwarding
+
+``` bash
+sudo sysctl -w net.ipv4.ip_forward=1
+```
+
+**One-line explanation:** Enables the Linux kernel to forward packets
+between network interfaces.
+
+  Part                      Meaning
+  ------------------------- -------------------------------------------
+  `sudo`                    Run as administrator.
+  `sysctl`                  Read/write Linux kernel parameters.
+  `-w`                      Write a new value.
+  `net.ipv4.ip_forward=1`   Enable IPv4 packet forwarding (`1` = on).
+
+**Why?**
+
+Without forwarding:
+
+``` text
+Jetson -> Laptop ✖ Internet
+```
+
+With forwarding:
+
+``` text
+Jetson -> Laptop -> Internet
+```
+
+------------------------------------------------------------------------
+
+### 2. Find Network Interfaces
+
+``` bash
+ip route
+```
+
+**One-line explanation:** Displays the routing table and identifies the
+Internet-facing interface.
+
+  Part      Meaning
+  --------- ---------------------------
+  `ip`      Linux networking utility.
+  `route`   Show routing table.
+
+Example:
+
+``` text
+default via 10.x.x.x dev enx7e3cb5be32ae
+```
+
+The interface after `dev` is the Internet interface.
+
+------------------------------------------------------------------------
+
+### 3. Enable NAT (Masquerading)
+
+``` bash
+sudo iptables -t nat -A POSTROUTING -o enx7e3cb5be32ae -j MASQUERADE
+```
+
+**One-line explanation:** Makes Jetson traffic appear as if it
+originated from the laptop.
+
+  Part                Meaning
+  ------------------- --------------------------------------------------
+  `iptables`          Linux firewall.
+  `-t nat`            Use the NAT table.
+  `-A`                Append a rule.
+  `POSTROUTING`       Apply rule just before packets leave the laptop.
+  `-o`                Output interface.
+  `enx7e3cb5be32ae`   Phone tethering interface.
+  `-j`                Jump to an action.
+  `MASQUERADE`        Replace Jetson's source IP with the laptop's IP.
+
+------------------------------------------------------------------------
+
+### 4. Allow Forwarding (Jetson → Internet)
+
+``` bash
+sudo iptables -A FORWARD -i enxaa90ffdcd55e -o enx7e3cb5be32ae -j ACCEPT
+```
+
+**One-line explanation:** Allow packets from the Jetson to leave through
+the phone Internet interface.
+
+  Part                Meaning
+  ------------------- --------------------------------
+  `-A FORWARD`        Add rule to forwarding chain.
+  `-i`                Incoming interface.
+  `enxaa90ffdcd55e`   Jetson USB Ethernet interface.
+  `-o`                Outgoing interface.
+  `enx7e3cb5be32ae`   Phone tethering interface.
+  `-j ACCEPT`         Permit the traffic.
+
+------------------------------------------------------------------------
+
+### 5. Allow Return Traffic
+
+``` bash
+sudo iptables -A FORWARD -i enx7e3cb5be32ae -o enxaa90ffdcd55e -m state --state ESTABLISHED,RELATED -j ACCEPT
+```
+
+**One-line explanation:** Allow reply packets from the Internet back to
+the Jetson.
+
+  --------------------------------------------------------------------------
+  Part                            Meaning
+  ------------------------------- ------------------------------------------
+  `-m state`                      Enable connection-state matching.
+
+  `--state ESTABLISHED,RELATED`   Match replies to existing connections.
+
+  `-j ACCEPT`                     Permit those packets.
+  --------------------------------------------------------------------------
+
+------------------------------------------------------------------------
+
+## Verification Commands
+
+### Check forwarding
+
+``` bash
+cat /proc/sys/net/ipv4/ip_forward
+```
+
+Expected:
+
+``` text
+1
+```
+
+------------------------------------------------------------------------
+
+### Check NAT rules
+
+``` bash
+sudo iptables -t nat -L -n -v
+```
+
+Look for:
+
+``` text
+MASQUERADE
+```
+
+------------------------------------------------------------------------
+
+### Check forwarding rules
+
+``` bash
+sudo iptables -L FORWARD -n -v
+```
+
+Look for your ACCEPT rules.
+
+------------------------------------------------------------------------
+
+### Test Internet on Jetson
+
+``` bash
+ping -c 4 8.8.8.8
+```
+
+Tests raw Internet connectivity.
+
+``` bash
+ping -c 4 google.com
+```
+
+Tests Internet + DNS.
+
+------------------------------------------------------------------------
+
+## Networking Concepts Learned
+
+  -----------------------------------------------------------------------
+  Concept                             Meaning
+  ----------------------------------- -----------------------------------
+  SSH                                 Secure remote terminal.
+
+  USB Ethernet                        Virtual Ethernet over USB.
+
+  IP Forwarding                       Allows Linux to behave like a
+                                      router.
+
+  NAT                                 Rewrites source IP so private
+                                      devices can access the Internet.
+
+  MASQUERADE                          Dynamic NAT using the outgoing
+                                      interface's IP.
+
+  FORWARD Chain                       Firewall rules for packets passing
+                                      through the laptop.
+
+  INPUT Chain                         Traffic destined for the laptop
+                                      itself.
+
+  OUTPUT Chain                        Traffic originating from the
+                                      laptop.
+
+  POSTROUTING                         Packet processing stage before
+                                      leaving the system.
+
+  `ip route`                          Shows routing decisions.
+
+  `iptables`                          Linux firewall and packet filtering
+                                      framework.
+  -----------------------------------------------------------------------
+
+------------------------------------------------------------------------
+
+## Final Packet Flow
+
+``` text
+Jetson
+192.168.55.1
+      │
+      ▼
+Laptop
+192.168.55.100
+      │
+      │  IP Forwarding
+      │  + NAT (MASQUERADE)
+      ▼
+Phone USB Tethering
+10.x.x.x
+      │
+      ▼
+Internet
+```
 **Install jtop — the single most useful tool on Jetson:**
 ```bash
 sudo apt install -y python3-pip
